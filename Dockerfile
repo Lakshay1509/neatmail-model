@@ -24,10 +24,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Set Hugging Face cache directory explicitly
-ENV HF_HOME=/app/model_cache
+# ENV HF_HOME=/app/model_cache
 
 # Bake the model into the image by downloading it during build
-RUN python -c "from transformers import pipeline; pipeline('zero-shot-classification', model='MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7')"
+# RUN python -c "from transformers import pipeline; pipeline('zero-shot-classification', model='MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7')"
 
 # Copy the application code
 COPY . .
