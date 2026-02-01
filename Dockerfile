@@ -23,11 +23,19 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
+# Set Hugging Face cache directory explicitly
+ENV HF_HOME=/app/model_cache
+
+# Bake the model into the image by downloading it during build
+RUN python -c "from transformers import pipeline; pipeline('zero-shot-classification', model='MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7')"
+
 # Copy the application code
 COPY . .
 
 # Create a non-root user and switch to it
-RUN adduser --disabled-password --gecos '' appuser
+# We combine chown to ensure the user owns the downloaded model cache
+RUN adduser --disabled-password --gecos '' appuser && \
+    chown -R appuser:appuser /app
 USER appuser
 
 # Expose the port the app runs on
