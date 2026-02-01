@@ -1,101 +1,39 @@
-# syntax=docker/dockerfile:1.6
+# Use a slim python base image for efficiency
+FROM python:3.11-slim
 
-# Stage 1: Builder
-FROM python:3.11.9-slim-bookworm AS builder
-
-WORKDIR /build
-
-# Install build dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        gcc \
-        g++ \
-        libffi-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
-
-# Copy and install dependencies first (better layer caching)
-COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir --prefix=/install -r requirements.txt
-
-# Stage 2: Runtime
-FROM python:3.11.9-slim-bookworm AS runtime
-
-# OCI Labels
-LABEL org.opencontainers.image.title="NeatMail Model Service" \
-      org.opencontainers.image.description="Production ML model service" \
-      org.opencontainers.image.version="1.0.0" \
-      org.opencontainers.image.vendor="NeatMail" \
-      org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.source="https://github.com/your-org/neatmail-model"
-
-# Security: Install security updates and required runtime libs only
-RUN apt-get update && \
-    apt-get upgrade -y && \
-    apt-get install -y --no-install-recommends \
-        curl \
-        tini \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean \
-    && rm -rf /tmp/* /var/tmp/*
-
-# Create non-root user with specific UID/GID
-RUN groupadd --gid 1000 appgroup && \
-    useradd --uid 1000 --gid appgroup --shell /usr/sbin/nologin --create-home appuser
+# Set environment variables
+# PYTHONDONTWRITEBYTECODE: Prevents Python from writing pyc files to disc
+# PYTHONUNBUFFERED: Prevents Python from buffering stdout and stderr
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Copy installed packages from builder
-COPY --from=builder /install /usr/local
+# Install system dependencies (if any are needed for specific wheels)
+# clean up apt cache to keep image small
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
 
-# Create necessary directories with proper permissions
-RUN mkdir -p /app/.cache/huggingface /app/logs && \
-    chown -R appuser:appgroup /app
+# Copy requirements first to leverage Docker cache
+COPY requirements.txt .
 
-# Copy application code
-COPY --chown=appuser:appgroup main.py .
+# Install dependencies
+# Note: Using --extra-index-url for pytorch cpu versions to ensure we find the +cpu wheels
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
-# Environment variables for production
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONFAULTHANDLER=1 \
-    PYTHONHASHSEED=random \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    # Application settings
-    TRANSFORMERS_CACHE=/app/.cache/huggingface \
-    HF_HOME=/app/.cache/huggingface \
-    # Uvicorn production settings
-    UVICORN_HOST=0.0.0.0 \
-    UVICORN_PORT=8000 \
-    UVICORN_WORKERS=1 \
-    UVICORN_LOG_LEVEL=info
+# Copy the application code
+COPY . .
 
-# Security hardening
-RUN chmod -R 755 /app && \
-    chmod 644 /app/main.py
+# Create a non-root user and switch to it
+RUN adduser --disabled-password --gecos '' appuser
+USER appuser
 
-# Switch to non-root user
-USER appuser:appgroup
-
-# Expose port
+# Expose the port the app runs on
 EXPOSE 8000
 
-# Health check with proper endpoint
-HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
-    CMD curl --fail --silent --max-time 5 http://localhost:8000/health || exit 1
-
-# Use tini as init system for proper signal handling
-ENTRYPOINT ["/usr/bin/tini", "--"]
-
-# Run with production settings
-CMD ["python", "-m", "uvicorn", "main:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8000", \
-     "--workers", "1", \
-     "--loop", "uvloop", \
-     "--http", "httptools", \
-     "--no-access-log", \
-     "--proxy-headers", \
-     "--forwarded-allow-ips", "*"]
+# Run the application
+# IMPORTANT: To access from Postman, run with: docker run -p 8000:8000 --env-file .env <image_name>
+# Then use http://localhost:8000/classify (use 'localhost' instead of '0.0.0.0' in Postman)
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
